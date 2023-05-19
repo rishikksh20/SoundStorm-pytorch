@@ -1,2 +1,2 @@
-# SoundStorm-pytorch
-SoundStorm: Efficient Parallel Audio Generation
+# SoundStorm: Efficient Parallel Audio Generation
+
