@@ -3,10 +3,9 @@ import numpy as np
 from tqdm import tqdm
 import argparse
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import utils as vutils
-from transformer import VQGANTransformer
+from core.transformer import VQGANTransformer
 from utils import load_data, plot_images
 from lr_schedule import WarmupLinearLRSchedule
 from torch.utils.tensorboard import SummaryWriter

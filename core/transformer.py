@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
-from bidirectional_transformer import BidirectionalTransformer
+from core.bidirectional_transformer import BidirectionalTransformer
 _CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to("cuda")
 
 
