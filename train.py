@@ -44,7 +44,7 @@ class TrainTransformer:
                 self.lr_schedule.step()
                 for i, imgs in zip(pbar, train_dataset):
                     imgs = imgs.to(device=args.device)
-                    logits, target = self.model(imgs)
+                    logits, target, masks = self.model(imgs)
                     loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
                     if step % args.accum_grad == 0:

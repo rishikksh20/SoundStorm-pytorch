@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import math
+import random
+from einops import rearrange
 from core.bidirectional_transformer import BidirectionalTransformer
 _CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to("cuda")
 
@@ -28,6 +30,33 @@ class VQGANTransformer(nn.Module):
     def load_checkpoint(self, epoch):
         self.load_state_dict(torch.load(os.path.join("checkpoints", f"transformer_epoch_{epoch}.pt")))
         print("Check!")
+
+    def masking(self, codes, q=None, t=None):
+
+        codes = rearrange(codes, 'b q n -> q b n')
+        q = random.randint(0, codes.size(0) - 1) if q is None else q
+        t = random.randint(0, codes.shape[-1] - 1) if t is None else t
+        t_mask = torch.ones(codes.shape)
+        t_mask[:, :, t:] = 0
+        t_mask[0:q] = 1
+        masked_indices = self.mask_token_id * torch.ones_like(codes, device=codes.device)
+        codes = t_mask * codes + (1 - t_mask) * masked_indices
+
+        indices = codes[q - 1]
+
+        gamma = self.gamma_func()
+        gammas = gamma(np.random.uniform())
+        r = math.floor(gammas * indices.shape[1])
+        sample = torch.rand(indices.shape, device=indices.device).topk(r, dim=1).indices
+        mask = torch.zeros(indices.shape, dtype=torch.bool, device=indices.device)
+        mask.scatter_(dim=1, index=sample, value=True)
+        mask[:, :t] = True
+        masked_indices = self.mask_token_id * torch.ones_like(indices, device=indices.device)
+        codes[q - 1] = mask * indices + (~mask) * masked_indices
+
+        codes = rearrange(codes, 'q b n -> b q n')
+
+        return codes, mask  # [B, Q, N+1]
 
     @staticmethod
     def load_vqgan():
@@ -55,28 +84,19 @@ class VQGANTransformer(nn.Module):
         # logits = self.transformer(z_indices, mask)
 
         _, z_indices = self.encode_to_z(x)
-        sos_tokens = torch.ones(x.shape[0], 1, dtype=torch.long, device=z_indices.device) * self.sos_token
 
-        r = math.floor(self.gamma(np.random.uniform()) * z_indices.shape[1])
-        sample = torch.rand(z_indices.shape, device=z_indices.device).topk(r, dim=1).indices
-        mask = torch.zeros(z_indices.shape, dtype=torch.bool, device=z_indices.device)
-        mask.scatter_(dim=1, index=sample, value=True)
+        b, Q, n = z_indices.shape
+        sos_tokens = torch.ones([b, Q], dtype=torch.long, device=z_indices.device) * self.sos_token
+        a_indices, masks = self.masking(z_indices)
+        a_indices = torch.cat((sos_tokens.unsqueeze(-1), a_indices), dim=-1)
+        target = torch.cat((sos_tokens.unsqueeze(-1), z_indices), dim=-1)
 
-        # torch.rand(z_indices.shape, device=z_indices.device)
-        # mask = torch.bernoulli(r * torch.ones(z_indices.shape, device=z_indices.device))
-        # mask = torch.bernoulli(torch.rand(z_indices.shape, device=z_indices.device))
-        # mask = mask.round().to(dtype=torch.int64)
-        # masked_indices = torch.zeros_like(z_indices)
-        masked_indices = self.mask_token_id * torch.ones_like(z_indices, device=z_indices.device)
-        a_indices = mask * z_indices + (~mask) * masked_indices
-
-        a_indices = torch.cat((sos_tokens, a_indices), dim=1)
-
-        target = torch.cat((sos_tokens, z_indices), dim=1)
 
         logits = self.transformer(a_indices)
 
-        return logits, target
+        # 3. Loss is only calculated on q level with masked token only (~mask)
+
+        return logits, target, masks
 
     def top_k_logits(self, logits, k):
         v, ix = torch.topk(logits, k)
