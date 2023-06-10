@@ -42,9 +42,10 @@ class TrainTransformer:
             print(f"Epoch {epoch}:")
             with tqdm(range(len(train_dataset))) as pbar:
                 self.lr_schedule.step()
-                for i, imgs in zip(pbar, train_dataset):
-                    imgs = imgs.to(device=args.device)
-                    logits, target, masks = self.model(imgs)
+                for i, cond, codes in zip(pbar, train_dataset):
+                    codes = codes.to(device=args.device)
+                    cond = cond.to(device=args.device)
+                    logits, target, masks = self.model(codes, cond)
                     loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
                     if step % args.accum_grad == 0:
@@ -55,7 +56,7 @@ class TrainTransformer:
                     pbar.update(0)
                     self.logger.add_scalar("Cross Entropy Loss", np.round(loss.cpu().detach().numpy().item(), 4), (epoch * len_train_dataset) + i)
             try:
-                log, sampled_imgs = self.model.log_images(imgs[0:1])
+                log, sampled_imgs = self.model.log_images(codes[0:1])
                 vutils.save_image(sampled_imgs.add(1).mul(0.5), os.path.join("results", f"{epoch}.jpg"), nrow=4)
                 plot_images(log)
             except:

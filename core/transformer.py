@@ -58,45 +58,26 @@ class VQGANTransformer(nn.Module):
 
         return codes, mask  # [B, Q, N+1]
 
-    @staticmethod
-    def load_vqgan():
-        from vq_f16 import VQModel
-        model = VQModel(ckpt_path="./checkpoints/vq-flickr.pt")
-        model = model.eval()
-        return model
 
-    @torch.no_grad()
-    def encode_to_z(self, x):
-        # quant_z, indices, _ = self.vqgan.encode(x)
-        quant_z, _, (_, _, indices) = self.vqgan.encode(x)
-        indices = indices.view(quant_z.shape[0], -1)
-        return quant_z, indices
 
-    def forward(self, x):
-        # _, z_indices = self.encode_to_z(x)
-        #
-        # r = np.random.uniform()
-        # mask = torch.bernoulli(r * torch.ones(z_indices.shape[-1], device=z_indices.device))
-        # mask = mask.round().bool()
-        #
-        # target = z_indices[:, mask]
-        #
-        # logits = self.transformer(z_indices, mask)
 
-        _, z_indices = self.encode_to_z(x)
+    def forward(self, codes, cond):
+        # codes : [Batch, N_quantizer, Len]
+        # cond : [Batch, len]
 
-        b, Q, n = z_indices.shape
-        sos_tokens = torch.ones([b, Q], dtype=torch.long, device=z_indices.device) * self.sos_token
-        a_indices, masks = self.masking(z_indices)
+
+        b, Q, n = codes.shape
+        sos_tokens = torch.ones([b, Q+1], dtype=torch.long, device=codes.device) * self.sos_token
+        a_indices, masks = self.masking(codes)
+        a_indices = torch.cat((cond.unsqueeze(1), a_indices), dim=1)
+
         a_indices = torch.cat((sos_tokens.unsqueeze(-1), a_indices), dim=-1)
-        target = torch.cat((sos_tokens.unsqueeze(-1), z_indices), dim=-1)
-
 
         logits = self.transformer(a_indices)
 
         # 3. Loss is only calculated on q level with masked token only (~mask)
 
-        return logits, target, masks
+        return logits, masks
 
     def top_k_logits(self, logits, k):
         v, ix = torch.topk(logits, k)
