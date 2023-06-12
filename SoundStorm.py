@@ -9,6 +9,7 @@ from torch import nn
 import torch.nn.functional as F
 from core.conformer import Conformer
 
+_CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to("cuda")
 
 class SoundStorm(nn.Module):
 
@@ -135,6 +136,121 @@ class SoundStorm(nn.Module):
             return lambda r: 1 - r ** 3
         else:
             raise NotImplementedError
+
+    def tokens_to_logits(self, cond, emb):
+        emb = emb.transpose(1, 2)           # [B, n, q]
+        emb = self.code_embeds(emb.long())  # [B, n, q, d]
+
+        semb = self.semantic_embeds(cond)  # [B, n, d]
+
+        emb = reduce(emb, 'b n q d -> b n d', 'sum')  # [B, n, d]
+
+        emb = emb + semb
+
+        out, _ = self.lm(emb, None)  # [B, n, d]
+
+        out = self.heads(out)  # [B, q*n, d]
+
+        logits = self.to_logits(out)  # [B, n, q, d]
+
+        return logits
+
+    def mask_by_random_topk(self, mask_len, probs, temperature=1.0):
+        confidence = torch.log(probs) + temperature * torch.distributions.gumbel.Gumbel(0, 1).sample(probs.shape).to("cuda")
+        sorted_confidence, _ = torch.sort(confidence, dim=-1)
+        # Obtains cut off threshold given the mask lengths.
+        cut_off = torch.take_along_dim(sorted_confidence, mask_len.to(torch.long), dim=-1)
+        # Masks tokens with lower confidence.
+        masking = (confidence < cut_off)
+        return masking
+
+    @torch.no_grad()
+    def generate(self, conds, codes, choice_temperature=4.5, T=[16, 1, 1, 1, 1, 1, 1, 1]):
+
+        b, q, n = codes.shape
+        _, len = conds.shape
+
+        assert q == len(T)
+
+        masked = []
+        for i in range(q):
+            masked.append(torch.zeros((b, 1, len - n), device="cuda", dtype=torch.int).fill_(self.mask_token_id[i]))
+
+        masked = torch.cat(masked, dim=1)
+
+        inputs = torch.cat((codes, masked), dim=-1)
+
+        assert inputs.shape[-1] == len
+
+        i = 0
+        unknown_number_in_the_beginning = torch.sum(inputs == self.mask_token_id[i], dim=-1)
+        gamma = self.gamma_func()
+        cur_ids = inputs  # [b, q, n]
+
+        for _ in range(q):
+
+            if i == 0:
+                # Confidence based sampling:
+                for t in range(T[i]-1):
+                    logits = self.tokens_to_logits(conds, cur_ids)          # [B, n, q, d]
+                    logits = rearrange(logits, 'b n q d -> q b n d')
+                    target_logits = logits[i]                               # [B, n, d]
+                    cur_ids = rearrange(cur_ids, 'b q n -> q b n')
+                    target_ids = cur_ids[i]    # [B, n]
+
+                    sampled_ids = torch.distributions.categorical.Categorical(logits=target_logits).sample()
+
+                    unknown_map = (target_ids == self.mask_token_id[i])  # which tokens need to be sampled -> bool [8, 257]
+                    sampled_ids = torch.where(unknown_map, sampled_ids,
+                                              target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
+
+                    ratio = 1. * (t + 1) / T[i]  # just a percentage e.g. 1 / 12
+                    mask_ratio = gamma(ratio)
+
+                    probs = F.softmax(target_logits, dim=-1)  # convert logits into probs [8, 257, 1024]
+                    selected_probs = torch.squeeze(torch.take_along_dim(probs, torch.unsqueeze(sampled_ids, -1), -1),
+                                                   -1)  # get probability for selected tokens in categorical call, also for already sampled ones [8, 257]
+
+                    selected_probs = torch.where(unknown_map, selected_probs, _CONFIDENCE_OF_KNOWN_TOKENS)
+
+                    mask_len = torch.unsqueeze(torch.floor(unknown_number_in_the_beginning * mask_ratio),
+                                               1)  # floor(256 * 0.99) = 254 --> [254, 254, 254, 254, ....]
+                    mask_len = torch.maximum(torch.zeros_like(mask_len),
+                                             torch.minimum(torch.sum(unknown_map, dim=-1, keepdim=True) - 1,
+                                                           mask_len))  # add -1 later when conditioning and also ones_like. Zeroes just because we have no cond token
+                    # max(1, min(how many unknown tokens, how many tokens we want to sample))
+
+                    masking = self.mask_by_random_topk(mask_len, selected_probs,
+                                                       temperature=choice_temperature * (1. - ratio))
+
+                    target_ids = torch.where(masking, self.mask_token_id[i], sampled_ids)
+
+                    cur_ids[i] = target_ids
+
+                    cur_ids = rearrange(cur_ids, 'q b n -> b q n')
+
+            # Greedy Sampling:
+            logits = self.tokens_to_logits(conds, cur_ids)  # [B, n, q, d]
+
+            logits = rearrange(logits, 'b n q d -> q b n d')
+
+            cur_ids = rearrange(cur_ids, 'b q n -> q b n')
+            target_ids = cur_ids[i]  # [B, n]
+            sampled_ids = torch.argmax(logits[i], dim=-1)
+            unknown_map = (target_ids == self.mask_token_id[i])
+            target_ids = torch.where(unknown_map, sampled_ids, target_ids)
+
+            cur_ids[i] = target_ids
+
+            cur_ids = rearrange(cur_ids, 'q b n -> b q n')
+
+            i = i + 1
+
+        return cur_ids      #[B, q, n]
+
+
+
+
 
 
 def num_params(model, print_out=True):
