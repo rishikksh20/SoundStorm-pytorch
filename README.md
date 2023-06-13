@@ -14,7 +14,7 @@ AudioLM, and relies on bidirectional attention and confidence-based parallel dec
 ```
 audiofilename1.wav|
 audiofilename2.wav|
-audiofilename3.wav
+audiofilename3.wav|
 ...
 ```
 

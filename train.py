@@ -116,7 +116,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.run_name = "<name>"
-    args.path = r"C:\Users\dome\datasets\landscape"
     args.checkpoint_path = r".\checkpoints"
     args.n_layers = 24
     args.dim = 768
