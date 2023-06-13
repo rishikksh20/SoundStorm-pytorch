@@ -201,8 +201,7 @@ class SoundStorm(nn.Module):
                     sampled_ids = torch.distributions.categorical.Categorical(logits=target_logits).sample()
 
                     unknown_map = (target_ids == self.mask_token_id[i])  # which tokens need to be sampled -> bool [8, 257]
-                    sampled_ids = torch.where(unknown_map, sampled_ids,
-                                              target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
+                    sampled_ids = torch.where(unknown_map, sampled_ids, target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
 
                     ratio = 1. * (t + 1) / T[i]  # just a percentage e.g. 1 / 12
                     mask_ratio = gamma(ratio)
