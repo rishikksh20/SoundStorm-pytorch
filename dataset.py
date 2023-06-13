@@ -69,7 +69,7 @@ class TTSDataset(Dataset):
         self.ratio = ratio
 
     def __getitem__(self, index):
-        id = self._metadata[index][4].split(".")[0]
+        id = self._metadata[index][0].split(".")[0]
 
         semb = np.load(os.path.join(self.path, "semantic_code", f"{id}.npy"))  # [B, L/2]
         codes = np.load(os.path.join(self.path, "codec_code", f"{id}.npy"))   # [B, L, number_of_quantizers]
