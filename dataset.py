@@ -34,19 +34,19 @@ def variable_random_window(semb, codes, ilens, min_frame=40):
     return new_semb, new_codes
 
 
-def get_tts_dataset(path, batch_size, hp, valid=False):
+def get_tts_dataset(path, batch_size, train_filelist, valid_filelist=None, ratio=1, valid=False):
     if valid:
-        file_ = hp.data.valid_filelist
+        file_ = valid_filelist
         pin_mem = False
         num_workers = 0
         shuffle = False
     else:
-        file_ = hp.data.train_filelist
+        file_ = train_filelist
         pin_mem = True
         num_workers = 4
         shuffle = True
     train_dataset = TTSDataset(
-        path, file_, hp.train.use_phonemes, hp.data.tts_cleaner_names, hp.train.eos
+        path, file_, ratio
     )
 
     train_set = DataLoader(
@@ -61,13 +61,11 @@ def get_tts_dataset(path, batch_size, hp, valid=False):
 
 
 class TTSDataset(Dataset):
-    def __init__(self, path, file_, tts_cleaner_names, eos, ratio):
+    def __init__(self, path, file_, ratio):
         self.path = path
         with open("{}".format(file_), encoding="utf-8") as f:
             self._metadata = [line.strip().split("|") for line in f]
 
-        self.tts_cleaner_names = tts_cleaner_names
-        self.eos = eos
         self.ratio = ratio
 
     def __getitem__(self, index):
@@ -118,5 +116,5 @@ def collate_tts(batch):
         semb,
         codes,
         olens,
-        ids,
+        ids
     )

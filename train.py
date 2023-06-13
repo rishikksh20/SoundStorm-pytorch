@@ -4,16 +4,15 @@ from tqdm import tqdm
 import argparse
 import torch
 import torch.nn.functional as F
-from torchvision import utils as vutils
-from core.transformer import VQGANTransformer
-from utils import load_data, plot_images
+from SoundStorm import SoundStorm
+from dataset import get_tts_dataset
 from lr_schedule import WarmupLinearLRSchedule
 from torch.utils.tensorboard import SummaryWriter
 
 
 class TrainTransformer:
     def __init__(self, args):
-        self.model = VQGANTransformer(args).to(device=args.device)
+        self.model = SoundStorm().to(device=args.device)
         self.optim = self.configure_optimizers()
         self.lr_schedule = WarmupLinearLRSchedule(
             optimizer=self.optim,
@@ -35,18 +34,18 @@ class TrainTransformer:
         self.train(args)
 
     def train(self, args):
-        train_dataset = load_data(args)
+        train_dataset = get_tts_dataset(args.path, args.batch_size, args.train, args.ratio)
         len_train_dataset = len(train_dataset)
         step = args.start_from_epoch * len_train_dataset
         for epoch in range(args.start_from_epoch+1, args.epochs+1):
             print(f"Epoch {epoch}:")
             with tqdm(range(len(train_dataset))) as pbar:
                 self.lr_schedule.step()
-                for i, cond, codes in zip(pbar, train_dataset):
+                for i, cond, codes, ilens, ids in zip(pbar, train_dataset):
                     codes = codes.to(device=args.device)
                     cond = cond.to(device=args.device)
-                    logits, target, masks = self.model(codes, cond)
-                    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
+                    loss, logit, target = self.model(cond, codes)
+                    #loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
                     if step % args.accum_grad == 0:
                         self.optim.step()
@@ -55,12 +54,7 @@ class TrainTransformer:
                     pbar.set_postfix(Transformer_Loss=np.round(loss.cpu().detach().numpy().item(), 4))
                     pbar.update(0)
                     self.logger.add_scalar("Cross Entropy Loss", np.round(loss.cpu().detach().numpy().item(), 4), (epoch * len_train_dataset) + i)
-            try:
-                log, sampled_imgs = self.model.log_images(codes[0:1])
-                vutils.save_image(sampled_imgs.add(1).mul(0.5), os.path.join("results", f"{epoch}.jpg"), nrow=4)
-                plot_images(log)
-            except:
-                pass
+
             if epoch % args.ckpt_interval == 0:
                 torch.save(self.model.state_dict(), os.path.join("checkpoints", f"transformer_epoch_{epoch}.pt"))
             torch.save(self.model.state_dict(), os.path.join("checkpoints", "transformer_current.pt"))
@@ -90,7 +84,7 @@ class TrainTransformer:
         #     {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": 4.5e-2},
         #     {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
         # ]
-        optimizer = torch.optim.Adam(self.model.transformer.parameters(), lr=1e-4, betas=(0.9, 0.96), weight_decay=4.5e-2)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4, betas=(0.9, 0.96), weight_decay=4.5e-2)
         return optimizer
 
 
@@ -101,11 +95,12 @@ if __name__ == '__main__':
     parser.add_argument('--image-size', type=int, default=256, help='Image height and width.)')
     parser.add_argument('--num-codebook-vectors', type=int, default=8192, help='Number of codebook vectors.')
     parser.add_argument('--beta', type=float, default=0.25, help='Commitment loss scalar.')
-    parser.add_argument('--image-channels', type=int, default=3, help='Number of channels of images.')
-    parser.add_argument('--dataset-path', type=str, default='./data', help='Path to data.')
+    parser.add_argument('--ratio', type=int, default=2, help='Ratio between Semantic token to Acoustic tokens.')
+    parser.add_argument('--path', type=str, default='./data', help='Path to data.')
+    parser.add_argument('--train', type=str, default='./filelist/train.txt', help='Training filelist path.')
     parser.add_argument('--checkpoint-path', type=str, default='./checkpoints/last_ckpt.pt', help='Path to checkpoint.')
     parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on.')
-    parser.add_argument('--batch-size', type=int, default=10, help='Batch size for training.')
+    parser.add_argument('--batch_size', type=int, default=10, help='Batch size for training.')
     parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
     parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
     parser.add_argument('--start-from-epoch', type=int, default=1, help='Number of epochs to train.')
@@ -121,7 +116,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.run_name = "<name>"
-    args.dataset_path = r"C:\Users\dome\datasets\landscape"
+    args.path = r"C:\Users\dome\datasets\landscape"
     args.checkpoint_path = r".\checkpoints"
     args.n_layers = 24
     args.dim = 768
