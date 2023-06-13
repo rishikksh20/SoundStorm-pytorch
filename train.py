@@ -91,10 +91,7 @@ class TrainTransformer:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="VQGAN")
     parser.add_argument('--run-name', type=str, default=None)
-    parser.add_argument('--latent-dim', type=int, default=32, help='Latent dimension n_z.')
-    parser.add_argument('--image-size', type=int, default=256, help='Image height and width.)')
-    parser.add_argument('--num-codebook-vectors', type=int, default=8192, help='Number of codebook vectors.')
-    parser.add_argument('--beta', type=float, default=0.25, help='Commitment loss scalar.')
+    parser.add_argument('--nq', type=int, default=8, help='Number of quantizer.')
     parser.add_argument('--ratio', type=int, default=2, help='Ratio between Semantic token to Acoustic tokens.')
     parser.add_argument('--path', type=str, default='./data', help='Path to data.')
     parser.add_argument('--train', type=str, default='./filelist/train.txt', help='Training filelist path.')
@@ -107,12 +104,10 @@ if __name__ == '__main__':
     parser.add_argument('--ckpt-interval', type=int, default=100, help='Number of epochs to train.')
     parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate.')
 
-    parser.add_argument('--sos-token', type=int, default=1025, help='Start of Sentence token.')
 
     parser.add_argument('--n-layers', type=int, default=24, help='Number of layers of transformer.')
     parser.add_argument('--dim', type=int, default=768, help='Dimension of transformer.')
     parser.add_argument('--hidden-dim', type=int, default=3072, help='Dimension of transformer.')
-    parser.add_argument('--num-image-tokens', type=int, default=256, help='Number of image tokens.')
 
     args = parser.parse_args()
     args.run_name = "<name>"
@@ -125,9 +120,6 @@ if __name__ == '__main__':
     args.epochs = 1000
 
     args.start_from_epoch = 0
-
-    args.num_codebook_vectors = 1024
-    args.num_image_tokens = 256
 
 
     train_transformer = TrainTransformer(args)
