@@ -71,13 +71,19 @@ class TTSDataset(Dataset):
     def __getitem__(self, index):
         id = self._metadata[index][0].split(".")[0]
 
-        semb = np.load(os.path.join(self.path, "semantic_code", f"{id}.npy"))  # [B, L/2]
-        codes = np.load(os.path.join(self.path, "codec_code", f"{id}.npy"))   # [B, L, number_of_quantizers]
+        semb = np.load(os.path.join(self.path, "semantic_code", f"{id}.npy"))  # [L/2]
+        codes = np.load(os.path.join(self.path, "codec_code", f"{id}.npy"))   # [L, number_of_quantizers]
 
-        semb = np.repeat(semb, self.ratio, axis=1)
-        assert semb.shape[-1] == codes.shape[-2]
+        semb = np.repeat(semb, self.ratio, axis=0)
+        mel_len = min(semb.shape[0], codes.shape[0])
 
-        mel_len = semb.shape[1]
+        if semb.shape[0] > mel_len:
+            semb = semb[:mel_len]
+        else:
+            codes = codes[:mel_len]
+
+        assert semb.shape[0] == codes.shape[0]
+
 
         return (
             semb,
@@ -85,7 +91,7 @@ class TTSDataset(Dataset):
             mel_len,
             codes
 
-        )  # codes [L, n_q]
+        )
 
     def __len__(self):
         return len(self._metadata)
