@@ -41,10 +41,11 @@ class TrainTransformer:
             print(f"Epoch {epoch}:")
             with tqdm(range(len(train_dataset))) as pbar:
                 self.lr_schedule.step()
-                for i, cond, codes, ilens, ids in zip(pbar, train_dataset):
+                for i, (cond, codes, ilens, ids) in zip(pbar, train_dataset):
+                    
                     codes = codes.to(device=args.device)
                     cond = cond.to(device=args.device)
-                    loss, logit, target = self.model(cond, codes)
+                    loss, logit, target = self.model(cond, codes.transpose(1, 2))
                     #loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
                     if step % args.accum_grad == 0:
@@ -93,15 +94,15 @@ if __name__ == '__main__':
     parser.add_argument('--run-name', type=str, default=None)
     parser.add_argument('--nq', type=int, default=8, help='Number of quantizer.')
     parser.add_argument('--ratio', type=int, default=2, help='Ratio between Semantic token to Acoustic tokens.')
-    parser.add_argument('--path', type=str, default='./data', help='Path to data.')
-    parser.add_argument('--train', type=str, default='./filelist/train.txt', help='Training filelist path.')
+    parser.add_argument('--path', type=str, default='/root/data', help='Path to data.')
+    parser.add_argument('--train', type=str, default='/root/data/train.txt', help='Training filelist path.')
     parser.add_argument('--checkpoint-path', type=str, default='./checkpoints/last_ckpt.pt', help='Path to checkpoint.')
     parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on.')
-    parser.add_argument('--batch_size', type=int, default=10, help='Batch size for training.')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training.')
     parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
     parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
     parser.add_argument('--start-from-epoch', type=int, default=1, help='Number of epochs to train.')
-    parser.add_argument('--ckpt-interval', type=int, default=100, help='Number of epochs to train.')
+    parser.add_argument('--ckpt-interval', type=int, default=20, help='Number of epochs to train.')
     parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate.')
 
 
@@ -115,8 +116,8 @@ if __name__ == '__main__':
     args.n_layers = 24
     args.dim = 768
     args.hidden_dim = 3072
-    args.batch_size = 4
-    args.accum_grad = 25
+    args.batch_size = 192
+    args.accum_grad = 1
     args.epochs = 1000
 
     args.start_from_epoch = 0

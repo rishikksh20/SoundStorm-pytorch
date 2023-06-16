@@ -5,36 +5,37 @@ from torch.utils.data import Dataset, DataLoader
 import numpy as np
 
 
-def variable_random_window(semb, codes, ilens, min_frame=40):
+def variable_random_window(batch, ilens, frames=3000):
     # Codes: [B, T, n_q]
     # Semb: [B, T]
-    n_batch = len(semb)
+    n_batch = len(batch)
 
-    max_frame = min(x.size(1) for x in codes)
+    max_frame = min(ilens)
+    
 
-    frames_per_seg = random.randint(min_frame, max_frame) if max_frame > min_frame else max_frame
-    n_q = codes.shape[-1]
+    frames_per_seg = random.randint(frames, max_frame) if max_frame > frames else max_frame
+    
+    n_q = batch[0][3].shape[-1]
 
-    assert codes.shape[1] == semb.shape[1]
 
 
 
     new_codes = torch.zeros(
-        (n_batch, frames_per_seg, n_q), dtype=codes.dtype, device=codes.device
+        (n_batch, frames_per_seg, n_q), dtype=ilens.dtype, device=ilens.device
     )
     new_semb = torch.zeros(
-        (n_batch, frames_per_seg), dtype=semb.dtype, device=semb.device
+        (n_batch, frames_per_seg), dtype=ilens.dtype, device=ilens.device
     )
 
     for i in range(n_batch):
-        start = random.randint(0, ilens[i] - frames_per_seg - 1)
+        start = random.randint(0, ilens[i] - frames_per_seg)
 
-        new_codes[i] = codes[i, start:start+frames_per_seg]
-        new_semb[i] = semb[i, start:start+frames_per_seg]
+        new_codes[i] = torch.from_numpy(batch[i][3][start:start+frames_per_seg]).long()
+        new_semb[i] = torch.from_numpy(batch[i][0][start:start+frames_per_seg]).long()
     return new_semb, new_codes
 
 
-def get_tts_dataset(path, batch_size, train_filelist, valid_filelist=None, ratio=1, valid=False):
+def get_tts_dataset(path, batch_size, train_filelist, ratio=2, valid_filelist=None, valid=False):
     if valid:
         file_ = valid_filelist
         pin_mem = False
@@ -64,27 +65,27 @@ class TTSDataset(Dataset):
     def __init__(self, path, file_, ratio):
         self.path = path
         with open("{}".format(file_), encoding="utf-8") as f:
-            self._metadata = [line.strip().split("|") for line in f]
+            self._metadata = [line.strip() for line in f]
 
         self.ratio = ratio
 
     def __getitem__(self, index):
-        id = self._metadata[index][0].split(".")[0]
+        id = self._metadata[index].split(".")[0]
 
         semb = np.load(os.path.join(self.path, "semantic_code", f"{id}.npy"))  # [L/2]
         codes = np.load(os.path.join(self.path, "codec_code", f"{id}.npy"))   # [L, number_of_quantizers]
-
+        
         semb = np.repeat(semb, self.ratio, axis=0)
         mel_len = min(semb.shape[0], codes.shape[0])
-
+        
         if semb.shape[0] > mel_len:
             semb = semb[:mel_len]
         else:
             codes = codes[:mel_len]
 
         assert semb.shape[0] == codes.shape[0]
-
-
+        
+        
         return (
             semb,
             id,
@@ -107,13 +108,11 @@ def pad2d(x, max_len):
 
 
 def collate_tts(batch):
-    olens = torch.from_numpy(np.array([y[2].shape[0] for y in batch])).long()
+    olens = torch.from_numpy(np.array([y[2] for y in batch])).long()
     ids = [x[1] for x in batch]
 
-    semb = torch.from_numpy(np.array([y[0] for y in batch])).long()
-    codes  = torch.from_numpy(np.array([y[-1] for y in batch])).long()
     # perform padding and conversion to tensor
-    semb, codes = variable_random_window(semb, codes, olens)
+    semb, codes = variable_random_window(batch, olens)
 
     # scale spectrograms to -4 <--> 4
     # mels = (mels * 8.) - 4

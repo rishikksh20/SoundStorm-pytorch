@@ -22,7 +22,7 @@ class SoundStorm(nn.Module):
 
         self.semantic_embeds = nn.Embedding((semantic_codebook_size + 1) * semantic_num_quantizers, dim)
 
-        self.code_embeds = nn.Embedding(num_codes_with_mask * acoustic_num_quantizers, dim)
+        self.code_embeds = nn.Embedding(num_codes_with_mask * acoustic_num_quantizers + 1, dim)
 
         self.register_buffer('quantizer_offsets', torch.arange(acoustic_num_quantizers) * num_codes_with_mask,
                              persistent=False)
@@ -62,7 +62,7 @@ class SoundStorm(nn.Module):
         codes = rearrange(codes, 'b n q -> q b n')
         q = random.randint(0, codes.size(0) - 1) if q is None else q
         t = random.randint(0, codes.shape[-1] - 1) if t is None else t
-        t_mask = torch.ones(codes.shape)
+        t_mask = torch.ones(codes.shape, device=codes.device)
         t_mask[:, :, t:] = 0
         t_mask[0:q] = 1
 
@@ -95,11 +95,11 @@ class SoundStorm(nn.Module):
         b, q, n = codes.shape
 
         codes = rearrange(codes, 'b q n -> b n q', q=q)
-        orig_codes = codes.clone()
+        orig_codes = codes.clone().detach()
         codes = codes + self.quantizer_offsets
-
+        
         emb, masks, q = self.masking(codes)
-
+        
         emb = self.code_embeds(emb.long())                     # [B, n, q, d]
 
         semb = self.semantic_embeds(cond)               # [B, n, d]
@@ -117,10 +117,9 @@ class SoundStorm(nn.Module):
         if return_loss:
             logits = logits[:, :, q-1].squeeze(2)       # [B, n, d]
             orig_codes = orig_codes[:, :, q-1]          # [B, n]
-
             loss = F.cross_entropy(
-                logits[masks],
-                orig_codes[masks]
+                logits[~masks],
+                orig_codes[~masks]
             )
             return loss, logits, out
         return logits, out, masks
