@@ -11,6 +11,12 @@ from core.conformer import Conformer
 
 _CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to("cuda")
 
+def uniform(shape, min = 0, max = 1, device = None):
+    return torch.zeros(shape, device = device).float().uniform_(0, 1)
+
+def cosine_schedule(t):
+    return torch.cos(t * math.pi * 0.5)
+
 class SoundStorm(nn.Module):
 
     def __init__(self, dim=1024, heads=16, linear_units=4096, num_blocks=12, semantic_codebook_size=1024,
@@ -19,17 +25,23 @@ class SoundStorm(nn.Module):
 
         super().__init__()
         num_codes_with_mask = acoustic_codebook_size + 1
+        sos_token = 0
+
+        self.ignore_index = -1
 
         self.semantic_embeds = nn.Embedding((semantic_codebook_size + 1) * semantic_num_quantizers, dim)
 
-        self.code_embeds = nn.Embedding(num_codes_with_mask * acoustic_num_quantizers + 1, dim)
+        self.code_embeds = nn.ModuleList(
+            [
+                nn.Embedding(num_codes_with_mask + 1, dim)
+                for _ in range(acoustic_num_quantizers)
+            ]
+        )
 
-        self.register_buffer('quantizer_offsets', torch.arange(acoustic_num_quantizers) * num_codes_with_mask,
-                             persistent=False)
 
-        self.register_buffer('mask_token_id', self.quantizer_offsets + num_codes_with_mask, persistent=False)
+        self.mask_token_id = num_codes_with_mask
 
-        self.register_buffer('sos_tokens', self.mask_token_id + 1, persistent=False)
+        self.sos_tokens = sos_token
 
         self.lm = Conformer(
             attention_dim=dim,
@@ -57,33 +69,72 @@ class SoundStorm(nn.Module):
             )
         )
 
+    # def masking(self, codes, q=None, t=None):
+    #
+    #     codes = rearrange(codes, 'b n q -> q b n')
+    #
+    #     t_mask = torch.ones(codes.shape, device=codes.device)
+    #     t_mask[:, :, t:] = 0
+    #     t_mask[0:q] = 1
+    #
+    #     masked_indices = self.mask_token_id[q-1] * torch.ones_like(codes, device=codes.device)
+    #     codes = t_mask * codes + (1 - t_mask) * masked_indices
+    #
+    #     indices = codes[q - 1]
+    #
+    #     gamma = self.gamma_func()
+    #     gammas = gamma(np.random.uniform())
+    #     r = math.floor(gammas * indices.shape[1])
+    #     sample = torch.rand(indices.shape, device=indices.device).topk(r, dim=1).indices
+    #     mask = torch.zeros(indices.shape, dtype=torch.bool, device=indices.device)
+    #     mask.scatter_(dim=1, index=sample, value=True)
+    #     mask[:, :t] = True
+    #     masked_indices = self.mask_token_id[q-1] * torch.ones_like(indices, device=indices.device)
+    #     codes[q - 1] = mask * indices + (~mask) * masked_indices
+    #
+    #     codes = rearrange(codes, 'q b n -> b n q')
+    #
+    #     return codes, mask  # [B, Q, N+1]
+
+    def level_mask(self, code, seq_len, b, t, device):
+        rand_time = uniform((b,), device=device)
+        rand_mask_probs = cosine_schedule(rand_time)
+        num_token_masked = (seq_len * rand_mask_probs).round().clamp(min=1)
+        batch_randperm = torch.rand((b, seq_len), device=device).argsort(dim=-1)
+        mask = batch_randperm < rearrange(num_token_masked, 'b -> b 1')
+        mask[:, :t] = False
+        labels = torch.where(mask, code, self.ignore_index)
+
+        code = torch.where(mask, self.mask_token_id, code)
+
+        return code, labels
+
+    def fine_mask(self, code, t):
+        code[:, t:] = self.mask_token_id
+        return code
+
+
     def masking(self, codes, q=None, t=None):
-
+        seq_len = codes.shape[1]
+        batch = codes.shape[0]
         codes = rearrange(codes, 'b n q -> q b n')
-        q = random.randint(0, codes.size(0) - 1) if q is None else q
-        t = random.randint(0, codes.shape[-1] - 1) if t is None else t
-        t_mask = torch.ones(codes.shape, device=codes.device)
-        t_mask[:, :, t:] = 0
-        t_mask[0:q] = 1
 
-        masked_indices = self.mask_token_id[q-1] * torch.ones_like(codes, device=codes.device)
-        codes = t_mask * codes + (1 - t_mask) * masked_indices
+        masked_codes = []
 
-        indices = codes[q - 1]
 
-        gamma = self.gamma_func()
-        gammas = gamma(np.random.uniform())
-        r = math.floor(gammas * indices.shape[1])
-        sample = torch.rand(indices.shape, device=indices.device).topk(r, dim=1).indices
-        mask = torch.zeros(indices.shape, dtype=torch.bool, device=indices.device)
-        mask.scatter_(dim=1, index=sample, value=True)
-        mask[:, :t] = True
-        masked_indices = self.mask_token_id[q-1] * torch.ones_like(indices, device=indices.device)
-        codes[q - 1] = mask * indices + (~mask) * masked_indices
+        for i, code in enumerate(codes):
+            if q == i:
+                c, label = self.level_mask(code, seq_len, batch, t, codes.device)
+                masked_codes.append(c)
+            elif i  > q:
+                masked_codes.append(self.fine_mask(code, t))
+            else:
+                masked_codes.append(code)
 
-        codes = rearrange(codes, 'q b n -> b n q')
+        return masked_codes, label
 
-        return codes, mask, q  # [B, Q, N+1]
+
+
 
 
     def forward(self, cond, codes, return_loss=True):
@@ -95,16 +146,27 @@ class SoundStorm(nn.Module):
         b, q, n = codes.shape
 
         codes = rearrange(codes, 'b q n -> b n q', q=q)
-        orig_codes = codes.clone().detach()
-        codes = codes + self.quantizer_offsets
-        
-        emb, masks, q = self.masking(codes)
-        
-        emb = self.code_embeds(emb.long())                     # [B, n, q, d]
+
+        q = random.randint(0, codes.size(0) - 1)
+        t = random.randint(0, codes.shape[-1] - 1)
+        masked_codes, labels = self.masking(codes, q, t)
+
+        masked_codes = torch.stack(masked_codes, dim=0)
+        masked_codes = rearrange(masked_codes, 'q b n -> b n q')
+
+        emb = None
+
+
+        for i, layer in enumerate(self.code_embeds):
+            if emb is None:
+                emb = layer(masked_codes[:, :, i].unsqueeze(-1)).squeeze(-2)
+            else:
+                emb =  emb + layer(masked_codes[:, :, i].unsqueeze(-1)).squeeze(-2)
+
 
         semb = self.semantic_embeds(cond)               # [B, n, d]
 
-        emb = reduce(emb, 'b n q d -> b n d', 'sum')                  # [B, n, d]
+        # emb = reduce(emb, 'b n q d -> b n d', 'sum')                  # [B, n, d]
 
         emb = emb + semb
 
@@ -115,34 +177,32 @@ class SoundStorm(nn.Module):
         logits = self.to_logits(out)                  # [B, n, q, d]
 
         if return_loss:
-            logits = logits[:, :, q-1].squeeze(2)       # [B, n, d]
-            orig_codes = orig_codes[:, :, q-1]          # [B, n]
+            logits = logits[:, :, q]      # [B, n, d]
+
             loss = F.cross_entropy(
-                logits[~masks],
-                orig_codes[~masks]
+                rearrange(logits, 'b n c -> b c n'),
+                labels,
+                ignore_index = self.ignore_index
             )
             return loss, logits, out
-        return logits, out, masks
+        return logits, out
 
-    def gamma_func(self, mode="cosine"):
-        if mode == "linear":
-            return lambda r: 1 - r
-        elif mode == "cosine":
-            return lambda r: np.cos(r * np.pi / 2)
-        elif mode == "square":
-            return lambda r: 1 - r ** 2
-        elif mode == "cubic":
-            return lambda r: 1 - r ** 3
-        else:
-            raise NotImplementedError
+
+
 
     def tokens_to_logits(self, cond, emb):
         emb = emb.transpose(1, 2)           # [B, n, q]
-        emb = self.code_embeds(emb.long())  # [B, n, q, d]
+
+        for i, layer in enumerate(self.code_embeds):
+            if emb is None:
+                emb = layer(emb[:, :, i].unsqueeze(-1)).squeeze(-2)
+            else:
+                emb =  emb + layer(emb[:, :, i].unsqueeze(-1)).squeeze(-2)
+        # emb = self.code_embeds(emb.long())  # [B, n, q, d]
 
         semb = self.semantic_embeds(cond)  # [B, n, d]
 
-        emb = reduce(emb, 'b n q d -> b n d', 'sum')  # [B, n, d]
+        # emb = reduce(emb, 'b n q d -> b n d', 'sum')  # [B, n, d]
 
         emb = emb + semb
 
@@ -183,7 +243,7 @@ class SoundStorm(nn.Module):
 
         i = 0
         unknown_number_in_the_beginning = torch.sum(inputs == self.mask_token_id[i], dim=-1)
-        gamma = self.gamma_func()
+
         cur_ids = inputs  # [b, q, n]
 
         for _ in range(q):
@@ -203,7 +263,7 @@ class SoundStorm(nn.Module):
                     sampled_ids = torch.where(unknown_map, sampled_ids, target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
 
                     ratio = 1. * (t + 1) / T[i]  # just a percentage e.g. 1 / 12
-                    mask_ratio = gamma(ratio)
+                    mask_ratio = cosine_schedule(ratio)
 
                     probs = F.softmax(target_logits, dim=-1)  # convert logits into probs [8, 257, 1024]
                     selected_probs = torch.squeeze(torch.take_along_dim(probs, torch.unsqueeze(sampled_ids, -1), -1),
