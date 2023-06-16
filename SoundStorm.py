@@ -20,6 +20,14 @@ def cosine_schedule(t):
 def gamma_func(t):
     return np.cos(t * np.pi / 2)
 
+
+def weights_init(m):
+    classname = m.__class__.__name__
+    if "Linear" in classname or "Embedding" == classname:
+        #print(f"Initializing Module {classname}.")
+        nn.init.trunc_normal_(m.weight.data, 0.0, 0.02)
+    # elif "Parameter" in classname:
+    #     return nn.init.trunc_normal_(m, 0.0, 0.02)
 class SoundStorm(nn.Module):
 
     def __init__(self, dim=1024, heads=16, linear_units=4096, num_blocks=12, semantic_codebook_size=1024,
@@ -58,50 +66,24 @@ class SoundStorm(nn.Module):
 
         self.heads = nn.Sequential(
             nn.Linear(dim, dim * acoustic_num_quantizers),
-            Rearrange('b n (h d) -> b (n h) d', h=acoustic_num_quantizers)
+            Rearrange('b n (h d) -> b (n h) d', h=acoustic_num_quantizers),
+            nn.GELU(),
+            nn.LayerNorm(dim, eps=1e-12),
+            Rearrange('b (n q) d -> b n q d', q=acoustic_num_quantizers)
         )
 
-        self.to_logits = nn.Sequential(
-            nn.LayerNorm(dim),
-            Rearrange('b (n q) d -> b n q d', q=acoustic_num_quantizers),
-            EinMix(
-                'b n q d -> b n q l',
-                weight_shape='q d l',
-                bias_shape='q l',
-                q=acoustic_num_quantizers,
-                l=acoustic_codebook_size,
-                d=dim
-            )
+
+        self.bias = nn.ParameterList([
+                nn.Parameter(torch.zeros(num_codes_with_mask + 2))
+                for _ in range(acoustic_num_quantizers)
+
+            ]
         )
 
         self.loss = nn.CrossEntropyLoss(reduction='mean', ignore_index=self.ignore_index)
+        self.apply(weights_init)
 
-    # def masking(self, codes, q=None, t=None):
-    #
-    #     codes = rearrange(codes, 'b n q -> q b n')
-    #
-    #     t_mask = torch.ones(codes.shape, device=codes.device)
-    #     t_mask[:, :, t:] = 0
-    #     t_mask[0:q] = 1
-    #
-    #     masked_indices = self.mask_token_id[q-1] * torch.ones_like(codes, device=codes.device)
-    #     codes = t_mask * codes + (1 - t_mask) * masked_indices
-    #
-    #     indices = codes[q - 1]
-    #
-    #     gamma = self.gamma_func()
-    #     gammas = gamma(np.random.uniform())
-    #     r = math.floor(gammas * indices.shape[1])
-    #     sample = torch.rand(indices.shape, device=indices.device).topk(r, dim=1).indices
-    #     mask = torch.zeros(indices.shape, dtype=torch.bool, device=indices.device)
-    #     mask.scatter_(dim=1, index=sample, value=True)
-    #     mask[:, :t] = True
-    #     masked_indices = self.mask_token_id[q-1] * torch.ones_like(indices, device=indices.device)
-    #     codes[q - 1] = mask * indices + (~mask) * masked_indices
-    #
-    #     codes = rearrange(codes, 'q b n -> b n q')
-    #
-    #     return codes, mask  # [B, Q, N+1]
+
 
     def level_mask(self, code, seq_len, b, t, device):
         rand_times = torch.empty(b, device=device).uniform_(0, 1)
@@ -186,19 +168,20 @@ class SoundStorm(nn.Module):
 
         out = self.heads(out)                         # [B, q*n, d]
 
-        logits = self.to_logits(out)                  # [B, n, q, d]
+        #logits = self.to_logits(out)                  # [B, n, q, d]
+
+        logits = torch.matmul(out[:, :, q], self.code_embeds[q].weight.T) + self.bias[q]
 
         if return_loss:
-            logits = logits[:, :, q]      # [B, n, d]
+            #logits = logits[:, :, q]      # [B, n, d]
 
-            # loss = F.cross_entropy(
-            #     rearrange(logits, 'b n c -> b c n'),
-            #     labels,
-            #     ignore_index = self.ignore_index
-            # )
-            loss = self.loss(rearrange(logits, 'b n c -> b c n'),
-                labels)
-            return loss, logits, out
+            loss = F.cross_entropy(
+                rearrange(logits, 'b n c -> b c n'),
+                labels,
+                ignore_index = self.ignore_index
+            )
+
+            return loss, logits, labels
         return logits, out
 
 

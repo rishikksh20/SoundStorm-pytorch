@@ -48,14 +48,26 @@ class TrainTransformer:
                     loss, logit, target = self.model(cond, codes.transpose(1, 2))
                     #loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
+
+                    ### Calculate accuracy:
+                    mask = target.eq(-1)
+                    maske_target = target[~mask]
+                    masked_logits = logit[~mask]
+
+                    masked_token_prediction = torch.argmax(masked_logits, dim=-1)
+                    token_correct = (masked_token_prediction == maske_target).sum()
+                    token_total = maske_target.shape[0]
+                    token_accuracy = token_correct / token_total
+
                     if step % args.accum_grad == 0:
                         self.optim.step()
                         self.optim.zero_grad()
                     step += 1
-                    pbar.set_postfix(Transformer_Loss=np.round(loss.cpu().detach().numpy().item(), 4))
+                    pbar.set_postfix(Accuracy=token_accuracy.cpu().detach().numpy().item(),
+                                     Transformer_Loss=np.round(loss.cpu().detach().numpy().item(), 4))
                     pbar.update(0)
                     self.logger.add_scalar("Cross Entropy Loss", np.round(loss.cpu().detach().numpy().item(), 4), (epoch * len_train_dataset) + i)
-
+                    self.logger.add_scalar("Accuracy", token_accuracy.cpu().detach().numpy().item(), (epoch * len_train_dataset) + i)
             if epoch % args.ckpt_interval == 0:
                 torch.save(self.model.state_dict(), os.path.join("checkpoints", f"transformer_epoch_{epoch}.pt"))
             torch.save(self.model.state_dict(), os.path.join("checkpoints", "transformer_current.pt"))
@@ -94,15 +106,15 @@ if __name__ == '__main__':
     parser.add_argument('--run-name', type=str, default=None)
     parser.add_argument('--nq', type=int, default=8, help='Number of quantizer.')
     parser.add_argument('--ratio', type=int, default=2, help='Ratio between Semantic token to Acoustic tokens.')
-    parser.add_argument('--path', type=str, default='/root/data', help='Path to data.')
-    parser.add_argument('--train', type=str, default='/root/data/train.txt', help='Training filelist path.')
+    parser.add_argument('--path', type=str, default='./data', help='Path to data.')
+    parser.add_argument('--train', type=str, default='./data/train.txt', help='Training filelist path.')
     parser.add_argument('--checkpoint-path', type=str, default='./checkpoints/last_ckpt.pt', help='Path to checkpoint.')
     parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training.')
     parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
     parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
     parser.add_argument('--start-from-epoch', type=int, default=1, help='Number of epochs to train.')
-    parser.add_argument('--ckpt-interval', type=int, default=20, help='Number of epochs to train.')
+    parser.add_argument('--ckpt-interval', type=int, default=5, help='Number of epochs to train.')
     parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate.')
 
 
@@ -111,12 +123,12 @@ if __name__ == '__main__':
     parser.add_argument('--hidden-dim', type=int, default=3072, help='Dimension of transformer.')
 
     args = parser.parse_args()
-    args.run_name = "<name>"
+    args.run_name = "tests"
     args.checkpoint_path = r".\checkpoints"
     args.n_layers = 24
     args.dim = 768
     args.hidden_dim = 3072
-    args.batch_size = 192
+    args.batch_size = 24
     args.accum_grad = 1
     args.epochs = 1000
 
