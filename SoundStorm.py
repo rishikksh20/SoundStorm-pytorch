@@ -233,7 +233,7 @@ class SoundStorm(nn.Module):
 
         masked = []
         for i in range(q):
-            masked.append(torch.zeros((b, 1, len - n), device="cuda", dtype=torch.int).fill_(self.mask_token_id[i]))
+            masked.append(torch.zeros((b, 1, len - n), device="cuda", dtype=torch.int).fill_(self.mask_token_id))
 
         masked = torch.cat(masked, dim=1)
 
@@ -242,12 +242,12 @@ class SoundStorm(nn.Module):
         assert inputs.shape[-1] == len
 
         i = 0
-        unknown_number_in_the_beginning = torch.sum(inputs == self.mask_token_id[i], dim=-1)
+
 
         cur_ids = inputs  # [b, q, n]
 
         for _ in range(q):
-
+            unknown_number_in_the_beginning = torch.sum(inputs[:, i] == self.mask_token_id, dim=-1)
             if i == 0:
                 # Confidence based sampling:
                 for t in range(T[i]-1):
@@ -259,7 +259,7 @@ class SoundStorm(nn.Module):
 
                     sampled_ids = torch.distributions.categorical.Categorical(logits=target_logits).sample()
 
-                    unknown_map = (target_ids == self.mask_token_id[i])  # which tokens need to be sampled -> bool [8, 257]
+                    unknown_map = (target_ids == self.mask_token_id)  # which tokens need to be sampled -> bool [8, 257]
                     sampled_ids = torch.where(unknown_map, sampled_ids, target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
 
                     ratio = 1. * (t + 1) / T[i]  # just a percentage e.g. 1 / 12
@@ -281,7 +281,7 @@ class SoundStorm(nn.Module):
                     masking = self.mask_by_random_topk(mask_len, selected_probs,
                                                        temperature=choice_temperature * (1. - ratio))
 
-                    target_ids = torch.where(masking, self.mask_token_id[i], sampled_ids)
+                    target_ids = torch.where(masking, self.mask_token_id, sampled_ids)
 
                     cur_ids[i] = target_ids
 
@@ -295,7 +295,7 @@ class SoundStorm(nn.Module):
             cur_ids = rearrange(cur_ids, 'b q n -> q b n')
             target_ids = cur_ids[i]  # [B, n]
             sampled_ids = torch.argmax(logits[i], dim=-1)
-            unknown_map = (target_ids == self.mask_token_id[i])
+            unknown_map = (target_ids == self.mask_token_id)
             target_ids = torch.where(unknown_map, sampled_ids, target_ids)
 
             cur_ids[i] = target_ids
