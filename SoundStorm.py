@@ -17,6 +17,9 @@ def uniform(shape, min = 0, max = 1, device = None):
 def cosine_schedule(t):
     return torch.cos(t * math.pi * 0.5)
 
+def gamma_func(t):
+    return np.cos(t * np.pi / 2)
+
 class SoundStorm(nn.Module):
 
     def __init__(self, dim=1024, heads=16, linear_units=4096, num_blocks=12, semantic_codebook_size=1024,
@@ -28,18 +31,20 @@ class SoundStorm(nn.Module):
         sos_token = 0
 
         self.ignore_index = -1
+        self.n_q = acoustic_num_quantizers
 
         self.semantic_embeds = nn.Embedding((semantic_codebook_size + 1) * semantic_num_quantizers, dim)
 
         self.code_embeds = nn.ModuleList(
             [
-                nn.Embedding(num_codes_with_mask + 1, dim)
+                nn.Embedding(num_codes_with_mask + 2, dim)
                 for _ in range(acoustic_num_quantizers)
             ]
         )
 
 
         self.mask_token_id = num_codes_with_mask
+        self.mask_upper_level = num_codes_with_mask + 1
 
         self.sos_tokens = sos_token
 
@@ -69,6 +74,8 @@ class SoundStorm(nn.Module):
             )
         )
 
+        self.loss = nn.CrossEntropyLoss(reduction='mean', ignore_index=self.ignore_index)
+
     # def masking(self, codes, q=None, t=None):
     #
     #     codes = rearrange(codes, 'b n q -> q b n')
@@ -97,12 +104,16 @@ class SoundStorm(nn.Module):
     #     return codes, mask  # [B, Q, N+1]
 
     def level_mask(self, code, seq_len, b, t, device):
-        rand_time = uniform((b,), device=device)
-        rand_mask_probs = cosine_schedule(rand_time)
-        num_token_masked = (seq_len * rand_mask_probs).round().clamp(min=1)
-        batch_randperm = torch.rand((b, seq_len), device=device).argsort(dim=-1)
-        mask = batch_randperm < rearrange(num_token_masked, 'b -> b 1')
-        mask[:, :t] = False
+        rand_times = torch.empty(b, device=device).uniform_(0, 1)
+        batched_randperm = torch.rand((b, seq_len - t), device=device).argsort(dim=-1).float()
+
+        rand_probs = cosine_schedule(rand_times)
+
+        num_tokens_mask = (rand_probs * (seq_len - t)).clamp(min=1.)
+
+        mask = batched_randperm < rearrange(num_tokens_mask, 'b -> b 1')
+        prompt_mask = torch.ones((b, t), device=device).eq(0)
+        mask = torch.cat([prompt_mask, mask], dim=1)
         labels = torch.where(mask, code, self.ignore_index)
 
         code = torch.where(mask, self.mask_token_id, code)
@@ -110,7 +121,7 @@ class SoundStorm(nn.Module):
         return code, labels
 
     def fine_mask(self, code, t):
-        code[:, t:] = self.mask_token_id
+        code[:, t:] = self.mask_upper_level
         return code
 
 
@@ -121,12 +132,11 @@ class SoundStorm(nn.Module):
 
         masked_codes = []
 
-
         for i, code in enumerate(codes):
             if q == i:
                 c, label = self.level_mask(code, seq_len, batch, t, codes.device)
                 masked_codes.append(c)
-            elif i  > q:
+            elif i > q:
                 masked_codes.append(self.fine_mask(code, t))
             else:
                 masked_codes.append(code)
@@ -147,12 +157,14 @@ class SoundStorm(nn.Module):
 
         codes = rearrange(codes, 'b q n -> b n q', q=q)
 
-        q = random.randint(0, codes.size(0) - 1)
-        t = random.randint(0, codes.shape[-1] - 1)
+        q = random.randint(0, self.n_q - 1)
+        t = random.randint(0, codes.shape[1] - 1)
+
         masked_codes, labels = self.masking(codes, q, t)
 
         masked_codes = torch.stack(masked_codes, dim=0)
         masked_codes = rearrange(masked_codes, 'q b n -> b n q')
+
 
         emb = None
 
@@ -179,11 +191,13 @@ class SoundStorm(nn.Module):
         if return_loss:
             logits = logits[:, :, q]      # [B, n, d]
 
-            loss = F.cross_entropy(
-                rearrange(logits, 'b n c -> b c n'),
-                labels,
-                ignore_index = self.ignore_index
-            )
+            # loss = F.cross_entropy(
+            #     rearrange(logits, 'b n c -> b c n'),
+            #     labels,
+            #     ignore_index = self.ignore_index
+            # )
+            loss = self.loss(rearrange(logits, 'b n c -> b c n'),
+                labels)
             return loss, logits, out
         return logits, out
 
@@ -320,8 +334,8 @@ def num_params(model, print_out=True):
 
 if __name__ == '__main__':
 
-    cond = torch.ones([2, 100]).long()
-    codes = torch.ones([2, 8, 100]).long()
+    cond = torch.randint(1, 1024, (2, 20)).long()
+    codes = torch.randint(1, 1024, (2, 8, 20)).long()
 
     model = SoundStorm()
 
