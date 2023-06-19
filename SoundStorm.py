@@ -187,14 +187,14 @@ class SoundStorm(nn.Module):
 
 
 
-    def tokens_to_logits(self, cond, emb):
-        emb = emb.transpose(1, 2)           # [B, n, q]
-
+    def tokens_to_logits(self, cond, semb):
+        semb = semb.transpose(1, 2)           # [B, n, q]
+        emb = None
         for i, layer in enumerate(self.code_embeds):
             if emb is None:
-                emb = layer(emb[:, :, i].unsqueeze(-1)).squeeze(-2)
+                emb = layer(semb[:, :, i].unsqueeze(-1)).squeeze(-2)
             else:
-                emb =  emb + layer(emb[:, :, i].unsqueeze(-1)).squeeze(-2)
+                emb =  emb + layer(semb[:, :, i].unsqueeze(-1)).squeeze(-2)
         # emb = self.code_embeds(emb.long())  # [B, n, q, d]
 
         semb = self.semantic_embeds(cond)  # [B, n, d]
@@ -207,9 +207,13 @@ class SoundStorm(nn.Module):
 
         out = self.heads(out)  # [B, q*n, d]
 
-        logits = self.to_logits(out)  # [B, n, q, d]
+        # logits = self.to_logits(out)  # [B, n, q, d]
+        logits = []
+        for q in range(self.n_q):
+            logit = torch.matmul(out[:, :, q], self.code_embeds[q].weight.T) + self.bias[q]
+            logits.append(logit)
 
-        return logits
+        return torch.stack(logits, dim=2)
 
     def mask_by_random_topk(self, mask_len, probs, temperature=1.0):
         confidence = torch.log(probs) + temperature * torch.distributions.gumbel.Gumbel(0, 1).sample(probs.shape).to("cuda")
@@ -226,7 +230,6 @@ class SoundStorm(nn.Module):
         b, q, n = codes.shape
         _, len = conds.shape
 
-        assert q == len(T)
 
         masked = []
         for i in range(q):
@@ -250,6 +253,7 @@ class SoundStorm(nn.Module):
                 for t in range(T[i]-1):
                     logits = self.tokens_to_logits(conds, cur_ids)          # [B, n, q, d]
                     logits = rearrange(logits, 'b n q d -> q b n d')
+
                     target_logits = logits[i]                               # [B, n, d]
                     cur_ids = rearrange(cur_ids, 'b q n -> q b n')
                     target_ids = cur_ids[i]    # [B, n]
@@ -260,6 +264,7 @@ class SoundStorm(nn.Module):
                     sampled_ids = torch.where(unknown_map, sampled_ids, target_ids)  # replace all -1 with their samples and leave the others untouched [8, 257]
 
                     ratio = 1. * (t + 1) / T[i]  # just a percentage e.g. 1 / 12
+                    ratio = torch.zeros((b,), device="cuda", dtype=torch.int).fill_(ratio)
                     mask_ratio = cosine_schedule(ratio)
 
                     probs = F.softmax(target_logits, dim=-1)  # convert logits into probs [8, 257, 1024]
