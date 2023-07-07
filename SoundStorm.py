@@ -30,7 +30,7 @@ def weights_init(m):
     #     return nn.init.trunc_normal_(m, 0.0, 0.02)
 class SoundStorm(nn.Module):
 
-    def __init__(self, dim=1024, heads=16, linear_units=4096, num_blocks=12, semantic_codebook_size=1024,
+    def __init__(self, dim=768, heads=8, linear_units=3072, num_blocks=8, semantic_codebook_size=1024,
                 semantic_num_quantizers=1, acoustic_codebook_size=1024, acoustic_num_quantizers=8,
                 positionwise_conv_kernel_size=5):
 
@@ -41,7 +41,7 @@ class SoundStorm(nn.Module):
         self.ignore_index = -1
         self.n_q = acoustic_num_quantizers
 
-        self.semantic_embeds = nn.Embedding((semantic_codebook_size + 1) * semantic_num_quantizers, dim)
+        self.semantic_embeds = nn.Embedding((semantic_codebook_size + 2) * semantic_num_quantizers, dim)
 
         self.code_embeds = nn.ModuleList(
             [
@@ -52,7 +52,7 @@ class SoundStorm(nn.Module):
 
 
         self.mask_token_id = num_codes_with_mask
-        self.mask_upper_level = num_codes_with_mask + 1
+        self.pad = num_codes_with_mask + 1
 
         self.sos_tokens = sos_token
 
@@ -103,7 +103,7 @@ class SoundStorm(nn.Module):
         return code, labels
 
     def fine_mask(self, code, t):
-        code[:, t:] = self.mask_upper_level
+        code[:, t:] = self.mask_token_id
         return code
 
 
@@ -142,6 +142,7 @@ class SoundStorm(nn.Module):
         q = random.randint(0, self.n_q - 1)
         t = random.randint(0, codes.shape[1] - 1)
 
+
         masked_codes, labels = self.masking(codes, q, t)
 
         masked_codes = torch.stack(masked_codes, dim=0)
@@ -159,6 +160,8 @@ class SoundStorm(nn.Module):
 
 
         semb = self.semantic_embeds(cond)               # [B, n, d]
+
+
 
         # emb = reduce(emb, 'b n q d -> b n d', 'sum')                  # [B, n, d]
 
@@ -178,7 +181,8 @@ class SoundStorm(nn.Module):
             loss = F.cross_entropy(
                 rearrange(logits, 'b n c -> b c n'),
                 labels,
-                ignore_index = self.ignore_index
+                ignore_index = self.ignore_index,
+                label_smoothing=0.1
             )
 
             return loss, logits, labels
@@ -225,7 +229,7 @@ class SoundStorm(nn.Module):
         return masking
 
     @torch.no_grad()
-    def generate(self, conds, codes, choice_temperature=4.5, T=[16, 1, 1, 1, 1, 1, 1, 1]):
+    def generate(self, conds, codes, choice_temperature=0.7, T=[16, 1, 1, 1, 1, 1, 1, 1]):
 
         b, q, n = codes.shape
         _, len = conds.shape
@@ -307,6 +311,46 @@ class SoundStorm(nn.Module):
             i = i + 1
 
         return cur_ids      #[B, q, n]
+
+    def generate_greedy(self, conds, codes):
+
+        b, q, n = codes.shape
+        _, len = conds.shape
+
+        masked = []
+        for i in range(q):
+            masked.append(torch.zeros((b, 1, len - n), device="cuda", dtype=torch.int).fill_(self.mask_token_id))
+
+        masked = torch.cat(masked, dim=1)
+
+        inputs = torch.cat((codes, masked), dim=-1)
+
+        assert inputs.shape[-1] == len
+
+        i = 0
+
+        cur_ids = inputs  # [b, q, n]
+
+        for _ in range(q):
+
+            # Greedy Sampling:
+            logits = self.tokens_to_logits(conds, cur_ids)  # [B, n, q, d]
+
+            logits = rearrange(logits, 'b n q d -> q b n d')
+
+            cur_ids = rearrange(cur_ids, 'b q n -> q b n')
+            target_ids = cur_ids[i]  # [B, n]
+            sampled_ids = torch.argmax(logits[i], dim=-1)
+            unknown_map = (target_ids == self.mask_token_id)
+            target_ids = torch.where(unknown_map, sampled_ids, target_ids)
+
+            cur_ids[i] = target_ids
+
+            cur_ids = rearrange(cur_ids, 'q b n -> b q n')
+
+            i = i + 1
+
+        return cur_ids  # [B, q, n]
 
 
 

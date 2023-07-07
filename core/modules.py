@@ -61,6 +61,7 @@ class LayerNorm(torch.nn.LayerNorm):
         Construct an LayerNorm object.
         """
         super(LayerNorm, self).__init__(nout, eps=1e-12, elementwise_affine=elementwise_affine)
+        self.nout = nout
         self.dim = dim
 
     def forward(self, x):
