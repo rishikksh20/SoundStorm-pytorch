@@ -1,0 +1,9 @@
+torch
+transformers
+tqdm
+einops
+pandas
+matplotlib
+scipy
+encodec
+tensorboard

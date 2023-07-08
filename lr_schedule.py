@@ -1,61 +1,63 @@
-from matplotlib import pyplot as plt
+import torch
 from torch import nn
 from torch.optim import Adam
+import math
 
 
-class WarmupLinearLRSchedule:
+class WarmupCosineLRSchedule(torch.optim.lr_scheduler._LRScheduler):
     """
     Implements Warmup learning rate schedule until 'warmup_steps', going from 'init_lr' to 'peak_lr' for multiple optimizers.
     """
-    def __init__(self, optimizer, init_lr, peak_lr, end_lr, warmup_epochs, epochs=100, current_step=0):
+    def __init__(self, optimizer, init_lr, peak_lr, end_lr, warmup_steps=10000, total_steps=400000, current_step=0):
         self.init_lr = init_lr
         self.peak_lr = peak_lr
+        self.end_lr = end_lr
         self.optimizer = optimizer
-        self.warmup_rate = (peak_lr - init_lr) / warmup_epochs
-        self.decay_rate = (end_lr - peak_lr) / (epochs - warmup_epochs)
-        self.update_steps = current_step
+        self._warmup_rate = (peak_lr - init_lr) / warmup_steps
+        self._decay_rate = (end_lr - peak_lr) / (total_steps - warmup_steps)
+        self._current_step = current_step
         self.lr = init_lr
-        self.warmup_steps = warmup_epochs
-        self.epochs = epochs
-        if current_step > 0:
-            self.lr = self.peak_lr + self.decay_rate * (current_step - 1 - warmup_epochs)
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self._last_lr = [self.lr]
 
     def set_lr(self, lr):
-        print(f"Setting lr: {lr}")
+        self._last_lr = [g['lr'] for g in self.optimizer.param_groups]
         for g in self.optimizer.param_groups:
             g['lr'] = lr
 
     def step(self):
-        if self.update_steps <= self.warmup_steps:
-            lr = self.init_lr + self.warmup_rate * self.update_steps
-        # elif self.warmup_steps < self.update_steps <= self.epochs:
+        if self._current_step < self.warmup_steps:
+            lr = self.init_lr + self._warmup_rate * self._current_step
+
+        elif self._current_step > self.total_steps:
+            lr = self.end_lr
+
         else:
-            lr = max(0., self.lr + self.decay_rate)
+            decay_ratio = (self._current_step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            if decay_ratio < 0.0 or decay_ratio > 1.0:
+                raise RuntimeError(
+                    "Decay ratio must be in [0.0, 1.0]. Fix LR scheduler settings.")
+            coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+            lr = self.end_lr + coeff * (self.peak_lr - self.end_lr)
+
         self.set_lr(lr)
         self.lr = lr
-        self.update_steps += 1
+        self._current_step += 1
         return self.lr
 
 
 if __name__ == '__main__':
     m = nn.Linear(10, 10)
     opt = Adam(m.parameters(), lr=1e-4)
-    s = WarmupLinearLRSchedule(opt, 1e-6, 1e-4, 0., 2)
+    s = WarmupCosineLRSchedule(opt, 1e-6, 2e-4, 1e-6, warmup_steps=2000,total_steps=20000, current_step=0)
     lrs = []
-    for i in range(101):
+    for i in range(25000):
         s.step()
         lrs.append(s.lr)
         print(s.lr)
 
-    m = nn.Linear(10, 10)
-    opt = Adam(m.parameters(), lr=1e-4)
-    s = WarmupLinearLRSchedule(opt, 1e-6, 1e-4, 0., 2, current_step=50)
-    lrs_s = []
-    for i in range(50, 101):
-        s.step()
-        lrs_s.append(s.lr)
-        print(s.lr)
 
-    plt.plot(lrs)
-    plt.plot(range(50, 101), lrs_s)
-    plt.show()
+    # plt.plot(lrs)
+    # plt.plot(range(0, 25000), lrs)
+    # plt.show()
