@@ -180,9 +180,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="VQGAN")
     parser.add_argument('--run-name', type=str, default=None)
     parser.add_argument('--nq', type=int, default=8, help='Number of quantizer.')
-    parser.add_argument('--ratio', type=int, default=2, help='Ratio between Semantic token to Acoustic tokens.')
-    parser.add_argument('--path', type=str, default='./data', help='Path to data.')
-    parser.add_argument('--train', type=str, default='./data/train.txt', help='Training filelist path.')
+    parser.add_argument('--semb_path ', type=str, default='./data/whisperspeech/whisperspeech/librilight/stoks/',
+                        help='Path to data.')
+    parser.add_argument('--encodec_path ', type=str, default='./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/',
+                        help='Path to data.')
     parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training.')
     parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
@@ -209,8 +210,8 @@ if __name__ == '__main__':
 
     args.start_from_epoch = 0
 
-    args.semb_path = "../../../data/whisperspeech/whisperspeech/librilight/stoks/"
-    args.encodec_path = "../../../data/whisperspeech/whisperspeech/librilight/encodec-6kbps/"
+    #args.semb_path = "../../../data/whisperspeech/whisperspeech/librilight/stoks/"
+    #args.encodec_path = "../../../data/whisperspeech/whisperspeech/librilight/encodec-6kbps/"
 
     train_transformer = TrainTransformer(args)
     

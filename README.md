@@ -9,24 +9,19 @@ AudioLM, and relies on bidirectional attention and confidence-based parallel dec
 
 ## Pre-processing and Training Scripts:
 
-**Filelist :**
-`train.txt` or `valid.txt` looks like this:
-```
-audiofilename1.wav|
-audiofilename2.wav|
-audiofilename3.wav|
-...
-```
+### DataSet :
+
+Pre-processing and Data format follows this: https://huggingface.co/datasets/collabora/whisperspeech
+
+
 
 ### Start Training:
 ```
-python train.py --path ./data --train train.txt --ratio 2
+python train.py
 ```
-**Semantic token path:** `./data/semantic_code`
+**Semantic token path:** `./data/whisperspeech/whisperspeech/librilight/stoks/`
 
-**Acoustic token path:** `./data/codec_code`
-
-**ratio:** acoustic_frame_rate / semantic_frame_rate  # Add should be a integer
+**Acoustic token path:** `./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/`
 
 
 
