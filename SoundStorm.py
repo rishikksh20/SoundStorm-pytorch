@@ -75,7 +75,7 @@ class SoundStorm(nn.Module):
         self.ignore_index = 1025
         self.n_q = acoustic_num_quantizers
 
-        self.semantic_embeds = nn.Embedding((semantic_codebook_size + 1) * semantic_num_quantizers, dim)
+        self.semantic_embeds = nn.Embedding((semantic_codebook_size + 2) * semantic_num_quantizers, dim)
 
         self.code_embeds = nn.ModuleList(
             [
@@ -121,7 +121,7 @@ class SoundStorm(nn.Module):
                 weight_shape='q d l',
                 bias_shape='q l',
                 q=acoustic_num_quantizers,
-                l=acoustic_codebook_size,
+                l=num_codes_with_mask + 2,
                 d=dim
             )
         )

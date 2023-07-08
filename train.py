@@ -9,7 +9,7 @@ from SoundStorm import SoundStorm
 from dataset import get_tts_dataset
 from lr_schedule import WarmupCosineLRSchedule
 from torch.utils.tensorboard import SummaryWriter
-
+from encodec import EncodecModel
 
 def topk_accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
@@ -31,7 +31,12 @@ def topk_accuracy(output, target, topk=(1,)):
 
 class TrainTransformer:
     def __init__(self, args):
-        self.model = SoundStorm().to(device=args.device)
+        encodec_ = EncodecModel.encodec_model_24khz()
+        encodec_.normalize = False
+        encodec_.set_target_bandwidth(6.0)
+        encodec_ = encodec_.to(device=args.device)
+
+        self.model = SoundStorm(encodec=encodec_).to(device=args.device)
         self.optim = torch.optim.AdamW(self.model.parameters(), lr=2e-4, betas=(0.8, 0.99), eps=0.000000001)
         self.lr_schedule = WarmupCosineLRSchedule(self.optim,
                                                  init_lr=0.000001,
@@ -50,7 +55,7 @@ class TrainTransformer:
 
     def train(self, args):
 
-        train_dataset, valid_dataset = get_tts_dataset(args.semb_path, args.encodec_path, args.batch_size)
+        train_dataset, valid_dataset = get_tts_dataset(args.spath, args.epath, args.batch_size)
         len_train_dataset = len(train_dataset)
         step = 0
         start_from_epoch = 0
@@ -85,13 +90,13 @@ class TrainTransformer:
                     cond = cond.reshape(b, n // 2 * 3)
                     assert cond.shape[-1] == codes.shape[-1]
 
-                    loss, logit, target = self.model(cond.long()[:, start:start + 750],
-                                                     codes.long()[:, :, start:start + 750])
+                    loss, logit, target = self.model(cond.long()[:, start:start + 375],
+                                                     codes.long()[:, :, start:start + 375])
                     # loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                     loss.backward()
 
                     ### Calculate accuracy:
-                    mask = target.eq(-1)
+                    mask = target.eq(1025)
                     maske_target = target[~mask]
                     masked_logits = logit[~mask]
 
@@ -150,7 +155,7 @@ class TrainTransformer:
                 # loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
                 avg_loss = avg_loss + loss
                 ### Calculate accuracy:
-                mask = target.eq(-1)
+                mask = target.eq(1025)
                 maske_target = target[~mask]
                 masked_logits = logit[~mask]
 
@@ -180,17 +185,17 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="VQGAN")
     parser.add_argument('--run-name', type=str, default=None)
     parser.add_argument('--nq', type=int, default=8, help='Number of quantizer.')
-    parser.add_argument('--semb_path ', type=str, default='./data/whisperspeech/whisperspeech/librilight/stoks/',
+    parser.add_argument('--spath ', type=str, default='./data/whisperspeech/whisperspeech/librilight/stoks/',
                         help='Path to data.')
-    parser.add_argument('--encodec_path ', type=str, default='./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/',
+    parser.add_argument('--epath ', type=str, default='./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/',
                         help='Path to data.')
     parser.add_argument('--device', type=str, default="cuda", help='Which device the training is on.')
     parser.add_argument('--batch_size', type=int, default=128, help='Batch size for training.')
     parser.add_argument('--accum-grad', type=int, default=10, help='Number for gradient accumulation.')
     parser.add_argument('--epochs', type=int, default=300, help='Number of epochs to train.')
     parser.add_argument('--start-from-epoch', type=int, default=0, help='Number of epochs to train.')
-    parser.add_argument('--ckpt-interval', type=int, default=30, help='Number of epochs to train.')
-    parser.add_argument('--validation_step', type=int, default=25, help='Number of epochs to train.')
+    parser.add_argument('--ckpt-interval', type=int, default=5000, help='Number of epochs to train.')
+    parser.add_argument('--validation_step', type=int, default=1000, help='Number of epochs to train.')
     parser.add_argument('--learning-rate', type=float, default=1e-4, help='Learning rate.')
     parser.add_argument('--chkpt', type=str, default=None, help='checkpoint path to load')
 
@@ -204,14 +209,14 @@ if __name__ == '__main__':
     args.n_layers = 24
     args.dim = 768
     args.hidden_dim = 3072
-    args.batch_size = 2
-    args.accum_grad = 8
+    args.batch_size = 16
+    args.accum_grad = 4
     args.epochs = 1000
 
     args.start_from_epoch = 0
 
-    #args.semb_path = "../../../data/whisperspeech/whisperspeech/librilight/stoks/"
-    #args.encodec_path = "../../../data/whisperspeech/whisperspeech/librilight/encodec-6kbps/"
+    #args.spath = "../../../data/whisperspeech/whisperspeech/librilight/stoks/"
+    #args.epath = "../../../data/whisperspeech/whisperspeech/librilight/encodec-6kbps/"
 
     train_transformer = TrainTransformer(args)
     
