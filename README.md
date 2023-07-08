@@ -30,6 +30,6 @@ python train.py
 
 ## References :
 
-* MAskGIT code : https://github.com/dome272/MaskGIT-pytorch
+* MaskGIT code : https://github.com/dome272/MaskGIT-pytorch
 * SoundStorm : https://github.com/feng-yufei/shared_debugging_code
 
