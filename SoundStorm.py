@@ -11,7 +11,8 @@ from torch import nn
 import torch.nn.functional as F
 from core.conformer import Conformer
 
-_CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to("cuda")
+_DEVICE = "cuda" if torch.cuda.is_available() else "mps"
+_CONFIDENCE_OF_KNOWN_TOKENS = torch.Tensor([torch.inf]).to(_DEVICE)
 
 
 def uniform(shape, min=0, max=1, device=None):
@@ -281,7 +282,7 @@ class SoundStorm(nn.Module):
     def mask_by_random_topk(self, mask_len, probs, temperature=1.0):
         confidence = torch.log(probs) + temperature * torch.distributions.gumbel.Gumbel(
             0, 1
-        ).sample(probs.shape).to("cuda")
+        ).sample(probs.shape).to(_DEVICE)
         sorted_confidence, _ = torch.sort(confidence, dim=-1)
         # Obtains cut off threshold given the mask lengths.
         cut_off = torch.take_along_dim(

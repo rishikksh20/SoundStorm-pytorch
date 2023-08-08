@@ -5,11 +5,11 @@ from tqdm import tqdm
 import argparse
 import torch
 import torch.nn.functional as F
+from torch.utils.tensorboard import SummaryWriter
+from encodec import EncodecModel
 from SoundStorm import SoundStorm
 from dataset import get_tts_dataset
 from lr_schedule import WarmupCosineLRSchedule
-from torch.utils.tensorboard import SummaryWriter
-from encodec import EncodecModel
 
 
 def topk_accuracy(output, target, topk=(1,)):
@@ -84,8 +84,10 @@ class TrainTransformer:
             with tqdm(range(len(train_dataset))) as pbar:
                 for i, (cond, codes, ids) in zip(pbar, train_dataset):
                     start = random.randint(0, 999)
-                    codes = codes.cuda()  # [B, 8, 2250]
-                    cond = cond.cuda()  # [B, 1500]
+                    # codes = codes.cuda()  # [B, 8, 2250]
+                    codes = codes.to(device=args.device)
+                    # cond = cond.cuda()  # [B, 1500]
+                    cond = cond.to(device=args.device)
 
                     b, n = cond.shape
                     cond = cond.reshape(b, n // 2, 2)
@@ -162,8 +164,8 @@ class TrainTransformer:
         top10k = 0
         with tqdm(range(len(valid_set))) as pbar:
             for i, (cond, codes, ids) in zip(pbar, valid_set):
-                codes = codes.cuda()[:, :, :750]  # [B, 8, 2250]
-                cond = cond.cuda()[:, :500]  # [B, 1500]
+                codes = codes.to(device=args.device)[:, :, :750]  # [B, 8, 2250]
+                cond = cond.to(device=args.device)[:, :500]  # [B, 1500]
 
                 b, n = cond.shape
                 cond = cond.reshape(b, n // 2, 2)
@@ -217,22 +219,22 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--nq", type=int, default=8, help="Number of quantizer.")
     parser.add_argument(
-        "--spath ",
+        "--spath",
         type=str,
-        default="./data/whisperspeech/whisperspeech/librilight/stoks/",
+        default="./data/whisperspeech/whisperspeech/librilight/stoks/small/",
         help="Path to data.",
     )
     parser.add_argument(
-        "--epath ",
+        "--epath",
         type=str,
-        default="./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/",
+        default="./data/whisperspeech/whisperspeech/librilight/encodec-6kbps/small/",
         help="Path to data.",
     )
     parser.add_argument(
-        "--device", type=str, default="mps", help="Which device the training is on."
+        "--device", type=str, default="cuda", help="Which device the training is on."
     )
     parser.add_argument(
-        "--batch_size", type=int, default=128, help="Batch size for training."
+        "--batch_size", type=int, default=32, help="Batch size for training."
     )
     parser.add_argument(
         "--accum-grad", type=int, default=10, help="Number for gradient accumulation."
@@ -241,13 +243,16 @@ if __name__ == "__main__":
         "--epochs", type=int, default=300, help="Number of epochs to train."
     )
     parser.add_argument(
-        "--start-from-epoch", type=int, default=0, help="Number of epochs to train."
+        "--start-from-epoch",
+        type=int,
+        default=0,
+        help="Number of epochs to start training.",
     )
     parser.add_argument(
-        "--ckpt-interval", type=int, default=5000, help="Number of epochs to train."
+        "--ckpt-interval", type=int, default=5000, help="Checkpoint interval."
     )
     parser.add_argument(
-        "--validation_step", type=int, default=1000, help="Number of epochs to train."
+        "--validation_step", type=int, default=1000, help="Validation interval."
     )
     parser.add_argument(
         "--learning-rate", type=float, default=1e-4, help="Learning rate."
@@ -267,14 +272,15 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    args.run_name = "tests3"
+    args.device = "cuda" if torch.cuda.is_available() else "mps"  # or cpu
+    args.run_name = "tests1"
     args.checkpoint_path = r".\checkpoints"
     args.n_layers = 24
     args.dim = 768
     args.hidden_dim = 3072
-    args.batch_size = 16
+    args.batch_size = 1  # Change batch size back to 128
     args.accum_grad = 4
-    args.epochs = 1000
+    args.epochs = 10
 
     args.start_from_epoch = 0
 
